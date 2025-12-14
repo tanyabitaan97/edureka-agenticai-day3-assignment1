@@ -21,6 +21,11 @@ load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 MODEL_NAME = "models/text-bison-001"
 
+models = genai.list_models()
+
+for model in models:
+    print(model.name, "->", model.supported_generation_methods)
+
 st.set_page_config(
     page_title="AI Legal Document Review Assistant",
     layout="wide"
@@ -93,7 +98,7 @@ def create_vector_store(chunks):
 def get_qa_chain(vector_store):
     """Create RetrievalQA chain"""
     llm = ChatGoogleGenerativeAI(
-    model=MODEL_NAME,
+    model="models/gemini-2.5-flash",
     temperature=0.3,
     google_api_key=GOOGLE_API_KEY,
     convert_system_message_to_human=True
@@ -202,95 +207,6 @@ if st.session_state.text_preview:
 
 import re
 
-def answer_question(vector_store, question):
-    """
-    Enhanced extractive QA with rule-based answer detection
-    for common legal question types.
-    """
-    retriever = vector_store.as_retriever(search_kwargs={"k": 5})
-    docs = retriever.get_relevant_documents(question)
-
-    if not docs:
-        return "No relevant information found in the document."
-
-    combined_text = " ".join([doc.page_content for doc in docs])
-    lower_text = combined_text.lower()
-    lower_q = question.lower()
-
-    # -------------------------------
-    # 1. Duration / Term
-    # -------------------------------
-    if "duration" in lower_q or "how long" in lower_q or "term" in lower_q:
-        match = re.search(r"(\b\d+\s*\(?\d*\)?\s*years?\b)", lower_text)
-        if match:
-            return f"**Answer:** The confidentiality obligation lasts for {match.group(1)}."
-
-    # -------------------------------
-    # 2. Definition questions
-    # -------------------------------
-    if "what is" in lower_q or "define" in lower_q:
-        for doc in docs:
-            if "means" in doc.page_content.lower():
-                return f"**Answer:** {doc.page_content.strip()}"
-
-    # -------------------------------
-    # 3. Obligations
-    # -------------------------------
-    if "obligation" in lower_q or "responsibility" in lower_q or "shall" in lower_q:
-        obligations = [
-            d.page_content.strip()
-            for d in docs
-            if "shall" in d.page_content.lower()
-        ]
-        if obligations:
-            return "**Answer:**\n\n" + "\n\n".join(f"- {o}" for o in obligations[:2])
-
-    # -------------------------------
-    # 4. Governing Law
-    # -------------------------------
-    if "governing law" in lower_q or "jurisdiction" in lower_q or "law governs" in lower_q:
-        for doc in docs:
-            if "governed by" in doc.page_content.lower():
-                return f"**Answer:** {doc.page_content.strip()}"
-
-    # -------------------------------
-    # 5. Parties
-    # -------------------------------
-    if "party" in lower_q or "parties" in lower_q:
-        for doc in docs:
-            if "between" in doc.page_content.lower():
-                return f"**Answer:** {doc.page_content.strip()}"
-
-    # -------------------------------
-    # 6. Exclusions
-    # -------------------------------
-    if "exclude" in lower_q or "not include" in lower_q:
-        exclusions = [
-            d.page_content.strip()
-            for d in docs
-            if "does not include" in d.page_content.lower()
-        ]
-        if exclusions:
-            return "**Answer:**\n\n" + "\n\n".join(f"- {e}" for e in exclusions[:2])
-
-    # -------------------------------
-    # 7. Termination
-    # -------------------------------
-    if "terminate" in lower_q or "termination" in lower_q:
-        for doc in docs:
-            if "terminate" in doc.page_content.lower():
-                return f"**Answer:** {doc.page_content.strip()}"
-
-    # -------------------------------
-    # 8. Fallback (clean + short)
-    # -------------------------------
-    return (
-        "**Answer:**\n\n"
-        + docs[0].page_content.strip()
-    )
-
-
-
 # -------------------------------------------------
 # QUESTION ANSWERING
 # -------------------------------------------------
@@ -299,11 +215,8 @@ user_question = st.chat_input("Ask a question about the uploaded legal documents
 if user_question:
     st.chat_message("human").markdown(user_question)
 
-    response = answer_question(
-        st.session_state.vector_store,
-        user_question
-    )
-
+    qa_chain = get_qa_chain(st.session_state.vector_store)
+    response = qa_chain.run(user_question) 
     st.chat_message("ai").markdown(response)
 
 # -------------------------------------------------
