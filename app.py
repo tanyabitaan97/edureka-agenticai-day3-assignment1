@@ -10,6 +10,8 @@ from langchain.chains import RetrievalQA
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.embeddings import HuggingFaceEmbeddings
 import google.generativeai as genai
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
 
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
@@ -20,11 +22,6 @@ load_dotenv()
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 MODEL_NAME = "models/text-bison-001"
-
-models = genai.list_models()
-
-for model in models:
-    print(model.name, "->", model.supported_generation_methods)
 
 st.set_page_config(
     page_title="AI Legal Document Review Assistant",
@@ -112,58 +109,54 @@ def get_qa_chain(vector_store):
     )
 
 
-def generate_summary(vector_store):
+def generate_summary_any_document(vector_store):
     """
-    Generate a complete extractive summary using semantic retrieval.
-    No LLM required.
+    Generate a high-quality summary for ANY type of document
+    using Gemini 2.5 Flash.
     """
-    retriever = vector_store.as_retriever(search_kwargs={"k": 10})
 
-    docs = retriever.get_relevant_documents(
-        "Summarize the document including definition, obligations, term, exclusions, and governing law."
-    )
+    retriever = vector_store.as_retriever(search_kwargs={"k": 12})
+    docs = retriever.get_relevant_documents("Summarize the document")
 
     if not docs:
         return "No content available for summarization."
 
-    summary_sections = {
-        "Agreement Overview": [],
-        "Confidential Information": [],
-        "Obligations": [],
-        "Exclusions": [],
-        "Term": [],
-        "Governing Law": [],
-        "Other Key Points": []
-    }
+    # Combine retrieved content
+    combined_text = "\n\n".join(doc.page_content for doc in docs)
 
-    for doc in docs:
-        text = doc.page_content.strip()
+    llm = ChatGoogleGenerativeAI(
+        model="models/gemini-2.5-flash",
+        temperature=0.3,
+        google_api_key=GOOGLE_API_KEY
+    )
 
-        lower = text.lower()
-        if "non-disclosure agreement" in lower:
-            summary_sections["Agreement Overview"].append(text)
-        elif "confidential information" in lower:
-            summary_sections["Confidential Information"].append(text)
-        elif "obligation" in lower or "shall" in lower:
-            summary_sections["Obligations"].append(text)
-        elif "exclusion" in lower:
-            summary_sections["Exclusions"].append(text)
-        elif "term" in lower or "years" in lower:
-            summary_sections["Term"].append(text)
-        elif "governing law" in lower:
-            summary_sections["Governing Law"].append(text)
-        else:
-            summary_sections["Other Key Points"].append(text)
+    prompt = PromptTemplate(
+        input_variables=["text"],
+        template="""
+You are an expert document analyst.
 
-    final_summary = ""
-    for section, contents in summary_sections.items():
-        if contents:
-            final_summary += f"### {section}\n"
-            for c in contents[:2]:  # limit repetition
-                final_summary += f"- {c}\n"
-            final_summary += "\n"
+Summarize the following document clearly and concisely.
+Adapt the summary to the document type automatically.
 
-    return final_summary
+Your summary should include:
+- Purpose of the document
+- Key topics or sections
+- Important details, facts, or decisions
+- Any conclusions, outcomes, or next steps (if applicable)
+
+Use clear headings and bullet points where appropriate.
+
+Document Content:
+{text}
+"""
+    )
+
+    chain = LLMChain(llm=llm, prompt=prompt)
+
+    summary = chain.run(text=combined_text)
+
+    return summary
+
 
 
 # -------------------------------------------------
@@ -226,6 +219,6 @@ if st.session_state.vector_store:
     st.markdown("---")
     if st.button("📑 Generate Document Summary"):
         with st.spinner("Generating summary..."):
-            summary = generate_summary(st.session_state.vector_store)
+            summary = generate_summary_any_document(st.session_state.vector_store)
             st.subheader("Document Summary")
             st.markdown(summary)
